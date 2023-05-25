@@ -1,0 +1,98 @@
+# Copyright (c) 2020-present, Royal Bank of Canada.
+# All rights reserved.
+#
+# This source code is licensed under the license found in the
+# LICENSE file in the root directory of this source tree.
+#
+""" Run regret experiments. """
+from argparse import ArgumentParser
+import os
+from math import log
+from threadpoolctl import threadpool_limits
+from raps.exp import Exp, dump
+
+
+def get_launcher_cmd(args, run_index, cmd):
+  """ Returns command to launch the script (for several runs). """
+  cmds = dict(
+      slurm=(f"sbatch --mem 2G -c {args.thread_limit} -J raps-{run_index:02d} "
+             f"-o {args.logdir}/{run_index:02d}-output.log "
+             f"--wrap='{cmd}'"),
+      tsp=f"tsp zsh -c '{cmd}'",
+      ts=f"ts zsh -c '{cmd}'"
+  )
+  return cmds[args.launcher]
+
+
+def get_args(launcher: bool):
+  """ Returns arguments for the script. """
+  parser = ArgumentParser()
+  parser.add_argument("--run-index", type=int, default=None)
+  parser.add_argument("--nruns", type=int, default=None)
+  parser.add_argument("--dry", action="store_true")
+  parser.add_argument("--launcher", choices=["slurm", "tsp", "ts"],
+                      default="ts")
+  parser.add_argument("--thread-limit", type=int, default=4)
+  parser.add_argument("--logdir", type=str, required=True)
+  if launcher:
+    return parser.parse_known_args()
+  parser.add_argument("--adj", choices=["tree", "erdos-renyi"], default="tree")
+  parser.add_argument("--domain-size", type=int, default=4)
+  parser.add_argument("--cliprange", type=float, nargs=2, default=(0, 1))
+  parser.add_argument("--noise-prob", type=float, default=0.1)
+  parser.add_argument("--num-nodes", type=int, default=10)
+  parser.add_argument("--num-parents", type=int, default=1)
+  parser.add_argument("--prob", type=int, default=None)
+  parser.add_argument("--delta", type=float, default=0.01)
+  parser.add_argument("--horizon", type=float, default=10e6)
+  parser.add_argument("--num-plot-points", type=int, default=100)
+  parser.add_argument("--dump", nargs='+', choices=["fig", "exp"],
+                      default=["fig", "exp"])
+  return parser.parse_args()
+
+
+def run(args, fig_dump_name="fig.pickle", exp_dump_name="exp.pickle"):
+  """ Runs the experiment. """
+  if args.prob is None:
+    args.prob = log(log(args.num_nodes)) / log(args.num_nodes)
+  exp = Exp.make(adj=getattr(Exp, f"make_{args.adj.replace('-', '_')}"),
+                 num_nodes=args.num_nodes,
+                 prob=args.prob,
+                 cliprange=args.cliprange,
+                 domain_size=args.domain_size,
+                 noise_prob=args.noise_prob,
+                 batch_size=1,
+                 num_parents=args.num_parents,
+                 delta=args.delta)
+  with threadpool_limits(limits=args.thread_limit):
+    exp.single_run(int(args.horizon))
+  filename_prefix = (f"{args.run_index:02d}-"
+                     if args.run_index is not None else "")
+  if "fig" in args.dump:
+    fig = exp.plot(npoints=args.num_plot_points)
+    dumpath = os.path.join(args.logdir, filename_prefix + fig_dump_name)
+    dump(fig, dumpath)
+  if "exp" in args.dump:
+    dump(exp, os.path.join(args.logdir, filename_prefix + exp_dump_name))
+
+
+def main():
+  """ Script entry point. """
+  args, unknown_args = get_args(launcher=True)
+  _ = get_args(launcher=False)
+  if not os.path.isdir(args.logdir):
+    os.makedirs(args.logdir)
+  if args.nruns is not None:
+    for i in range(args.nruns):
+      cmd = (f"raps --run-index {i} --logdir {args.logdir} "
+             + " ".join(unknown_args))
+      cmd = get_launcher_cmd(args, i, cmd)
+      if not args.dry:
+        os.system(cmd)
+      else:
+        print(cmd)
+  elif not args.dry:
+    run(get_args(launcher=False))
+
+if __name__ == "__main__":
+  main()
