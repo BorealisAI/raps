@@ -1,3 +1,15 @@
+# vim files
+*.swp
+*.swo
+
+# pyenv dirs/files
+bin/
+etc/
+include/
+lib/
+share/
+pyvenv.cfg
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
